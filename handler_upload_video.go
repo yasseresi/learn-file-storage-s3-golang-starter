@@ -72,14 +72,22 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Generate random 32-byte hex key for S3
+	// Get video aspect ratio from the temporary file
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to determine video aspect ratio", err)
+		return
+	}
+
+	// Generate random 32-byte hex key for S3 with aspect ratio prefix
 	randomBytes := make([]byte, 32)
 	_, err = rand.Read(randomBytes)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to generate random key", err)
 		return
 	}
-	key := hex.EncodeToString(randomBytes) + ".mp4"
+	prefix := aspectRatioToPrefix(aspectRatio)
+	key := fmt.Sprintf("%s/%s.mp4", prefix, hex.EncodeToString(randomBytes))
 
 	// Seek to beginning of temp file for reading
 	_, err = tempFile.Seek(0, 0)
