@@ -79,6 +79,14 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Process video for fast start encoding
+	processedVideoPath, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to process video for fast start", err)
+		return
+	}
+	defer os.Remove(processedVideoPath) // Clean up processed file
+
 	// Generate random 32-byte hex key for S3 with aspect ratio prefix
 	randomBytes := make([]byte, 32)
 	_, err = rand.Read(randomBytes)
@@ -89,18 +97,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	prefix := aspectRatioToPrefix(aspectRatio)
 	key := fmt.Sprintf("%s/%s.mp4", prefix, hex.EncodeToString(randomBytes))
 
-	// Seek to beginning of temp file for reading
-	_, err = tempFile.Seek(0, 0)
+	// Open the processed video file for upload
+	processedFile, err := os.Open(processedVideoPath)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to seek temp file", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to open processed video file", err)
 		return
 	}
+	defer processedFile.Close()
 
-	// Upload to S3
+	// Upload processed video to S3
 	_, err = cfg.s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &key,
-		Body:        tempFile,
+		Body:        processedFile,
 		ContentType: &mediaType,
 	})
 	if err != nil {
@@ -119,9 +128,9 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Update video record with S3 URL
-	videoURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
-	video.VideoURL = &videoURL
+	// Update video record with bucket and key (comma-delimited)
+	bucketAndKey := fmt.Sprintf("%s,%s", cfg.s3Bucket, key)
+	video.VideoURL = &bucketAndKey
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
@@ -129,5 +138,12 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, video)
+	// Convert to signed video for response
+	signedVideo, err := cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't generate presigned URL", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, signedVideo)
 }

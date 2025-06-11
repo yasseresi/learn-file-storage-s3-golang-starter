@@ -69,3 +69,19 @@ func aspectRatioToPrefix(aspectRatio string) string {
 		return "other"
 	}
 }
+
+func processVideoForFastStart(filePath string) (string, error) {
+	// Create output file path by appending .processing
+	outputPath := filePath + ".processing"
+
+	// Create ffmpeg command for fast start processing
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputPath)
+
+	// Run the command
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+
+	return outputPath, nil
+}
